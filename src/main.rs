@@ -23,6 +23,10 @@ async fn main() -> std::io::Result<()> {
                 web::scope("/api")
                 .route("/", web::to(|| async { HttpResponse::Ok().body("api router") }))
             )
+            .service(
+                web::scope("/subscribe")
+                .route("/", web::to(|| async {HttpResponse::Ok().body("subscription")}))
+            )
     }).bind((ADDRESS, PORT))?
     .run()
     .await
