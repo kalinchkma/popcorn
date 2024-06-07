@@ -92,3 +92,18 @@
 - Individual file
 - Directory
 - Configuration
+
+### Protocols
+
+- Websockets
+- HTTP/2
+
+### Auto-Reloading Development Server
+
+- Its done using cargo-watch
+
+### Databases
+
+- Postgres
+- SQLite
+- MongoDB
