@@ -18,11 +18,8 @@ async fn main() -> std::io::Result<()> {
 
     let config = server_config::Config::from_env();
 
-    println!("Environtment configuration: {}:{}", config.port, config.host);
-
-    const ADDRESS: &str = "127.0.0.1";
-    const PORT: u16 = 6060;
-    println!("Server running on http:/{}:{}/", ADDRESS, PORT);
+ 
+    println!("Server running on http:/{}:{}/", config.host, config.port);
     HttpServer::new(|| {
         App::new()
             .service(hello_world)
@@ -35,7 +32,7 @@ async fn main() -> std::io::Result<()> {
                 web::scope("/subscribe")
                 .route("/", web::to(|| async {HttpResponse::Ok().body("subscription")}))
             )
-    }).bind((ADDRESS, PORT))?
+    }).bind((config.host, config.port))?
     .run()
     .await
 }
