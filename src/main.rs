@@ -1,36 +1,168 @@
-use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
-
-use popcorn::config::server_config;
-
-
-#[get("/hello-world")]
-async fn hello_world() -> impl Responder {
-    HttpResponse::Ok().body("Hello world")
+mod config {
+    use serde::Deserialize;
+    #[derive(Debug, Default, Deserialize)]
+    pub struct ExampleConfig {
+        pub server_addr: String,
+        pub pg: deadpool_postgres::Config,
+    }
 }
 
-async fn echo() -> impl Responder {
-    HttpResponse::Ok().body("echo.....")
+mod models {
+    use serde::{Deserialize, Serialize};
+    use tokio_pg_mapper_derive::PostgresMapper;
+
+    #[derive(Deserialize, PostgresMapper, Serialize)]
+    #[pg_mapper(table = "users")] // singular 'user' is a keyword..
+    pub struct User {
+        pub email: String,
+        pub first_name: String,
+        pub last_name: String,
+        pub username: String,
+    }
 }
 
-#[tokio::main] 
+mod errors {
+    use actix_web::{HttpResponse, ResponseError};
+    use deadpool_postgres::PoolError;
+    use derive_more::{Display, From};
+    use tokio_pg_mapper::Error as PGMError;
+    use tokio_postgres::error::Error as PGError;
+
+    #[derive(Display, From, Debug)]
+    pub enum MyError {
+        NotFound,
+        PGError(PGError),
+        PGMError(PGMError),
+        PoolError(PoolError),
+    }
+    impl std::error::Error for MyError {}
+
+    impl ResponseError for MyError {
+        fn error_response(&self) -> HttpResponse {
+            match *self {
+                MyError::NotFound => HttpResponse::NotFound().finish(),
+                MyError::PoolError(ref err) => {
+                    HttpResponse::InternalServerError().body(err.to_string())
+                }
+                _ => HttpResponse::InternalServerError().finish(),
+            }
+        }
+    }
+}
+
+mod db {
+    use deadpool_postgres::Client;
+    use tokio_pg_mapper::FromTokioPostgresRow;
+
+    use crate::{errors::MyError, models::User};
+
+    pub async fn get_users(client: &Client) -> Result<Vec<User>, MyError> {
+        let stmt = include_str!("../sql/get_users.sql");
+        let stmt = stmt.replace("$table_fields", &User::sql_table_fields());
+        let stmt = client.prepare(&stmt).await.unwrap();
+
+        let results = client
+            .query(&stmt, &[])
+            .await?
+            .iter()
+            .map(|row| User::from_row_ref(row).unwrap())
+            .collect::<Vec<User>>();
+
+        Ok(results)
+    }
+
+    pub async fn add_user(client: &Client, user_info: User) -> Result<User, MyError> {
+        let _stmt = include_str!("../sql/add_user.sql");
+        let _stmt = _stmt.replace("$table_fields", &User::sql_table_fields());
+        let stmt = client.prepare(&_stmt).await.unwrap();
+
+        client
+            .query(
+                &stmt,
+                &[
+                    &user_info.email,
+                    &user_info.first_name,
+                    &user_info.last_name,
+                    &user_info.username,
+                ],
+            )
+            .await?
+            .iter()
+            .map(|row| User::from_row_ref(row).unwrap())
+            .collect::<Vec<User>>()
+            .pop()
+            .ok_or(MyError::NotFound) // more applicable for SELECTs
+    }
+}
+
+mod handlers {
+    use actix_web::{web, Error, HttpResponse};
+    use deadpool_postgres::{Client, Pool};
+
+    use crate::{db, errors::MyError, models::User};
+
+    pub async fn get_users(db_pool: web::Data<Pool>) -> Result<HttpResponse, Error> {
+        let client: Client = db_pool.get().await.map_err(MyError::PoolError)?;
+
+        let users = db::get_users(&client).await?;
+
+        Ok(HttpResponse::Ok().json(users))
+    }
+
+    pub async fn add_user(
+        user: web::Json<User>,
+        db_pool: web::Data<Pool>,
+    ) -> Result<HttpResponse, Error> {
+        let user_info: User = user.into_inner();
+
+        let client: Client = db_pool.get().await.map_err(MyError::PoolError)?;
+
+        let new_user = db::add_user(&client, user_info).await?;
+
+        Ok(HttpResponse::Ok().json(new_user))
+    }
+}
+
+use std::process;
+
+use ::config::Config;
+use actix_web::{web, App, HttpServer};
+use dotenvy::dotenv;
+use handlers::{add_user, get_users};
+use tokio_postgres::NoTls;
+
+use crate::config::ExampleConfig;
+
+#[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    dotenv().ok();
 
-    let config = server_config::Config::from_env();
-    
-    println!("Server running on http:/{}:{}/", config.host, config.port);
-    HttpServer::new(|| {
-        App::new()
-            .service(hello_world)
-            .route("/echo", web::get().to(echo))  
-            .service(
-                web::scope("/api")
-                .route("/", web::to(|| async { HttpResponse::Ok().body("api router") }))
-            )
-            .service(
-                web::scope("/subscribe")
-                .route("/", web::to(|| async {HttpResponse::Ok().body("subscription")}))
-            )
-    }).bind((config.host, config.port))?
-    .run()
-    .await
+    let config_ = Config::builder()
+        .add_source(::config::Environment::default())
+        .build()
+        .unwrap();
+    // println!("{:?}", config_);
+    let config: ExampleConfig = config_.try_deserialize().unwrap_or_else(|e| {
+        println!("{:?}", e);
+        process::exit(0)
+    });
+
+    println!("{:?}", config);
+
+    let pool = config.pg.create_pool(None, NoTls).unwrap();
+
+    println!("Pool {:?}", pool);
+
+    let server = HttpServer::new(move || {
+        App::new().app_data(web::Data::new(pool.clone())).service(
+            web::resource("/users")
+                .route(web::post().to(add_user))
+                .route(web::get().to(get_users)),
+        )
+    })
+    .bind(config.server_addr.clone())?
+    .run();
+    println!("Server running at http://{}/", config.server_addr);
+
+    server.await
 }
