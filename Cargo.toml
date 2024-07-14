@@ -3,6 +3,10 @@ name = "popcorn"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "popcorn"
+path = "src/main.rs"
+
 [dependencies]
 actix-web="4"
 dotenvy = "0.15.7"
