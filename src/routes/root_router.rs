@@ -2,23 +2,32 @@ use axum::Router;
 
 #[derive(Debug)]
 pub struct RootRouter {
-    routes: Vec<Router>,
+    pub routes: Vec<Router>,
 }
 
 impl RootRouter {
     // Create a new root router
-    fn new() -> Self {
+    pub fn new() -> Self {
         RootRouter { routes: Vec::new() }
     }
 
     // add new routes to root router
-    fn add(&mut self, route: Router) {
-        self.routes.push(route);
+    pub fn add(&mut self, router: Router) {
+        self.routes.push(router);
     }
 
     // check lenght of root router
-    fn length(&self) -> usize {
+    pub fn length(&self) -> usize {
         self.routes.len()
+    }
+
+    // get routes
+    pub fn routers(self) -> Router {
+        let mut router_bucket = Router::new();
+        for router in self.routes {
+            router_bucket.merge(router);
+        }
+        router_bucket
     }
 }
 
