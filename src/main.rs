@@ -1,7 +1,9 @@
-use axum::{http::{StatusCode, Uri}, routing::get, Router};
+use axum::{body::Body, extract::{Path, Request}, http::{ Response, StatusCode, Uri}, routing::get, Router};
 use popcorn::settings::config::Config;
-use std::process;
+use std::{collections::HashMap, convert::Infallible, process};
 use popcorn::core::routes::RouterBucket;
+use tower::service_fn;
+
 
 #[tokio::main]
 async fn main() {
@@ -26,6 +28,29 @@ async fn main() {
 
     root_router.push(Router::new().route("/test", get(testing)));
 
+    let mut router: Router = Router::new().route_service("/brand", service_fn(|req: Request| async move {
+        let body = Body::from(format!("This is from route service Medthid {}", req.method()));
+        let res = Response::new(body);
+        Ok::<_,Infallible>(res)
+    }));
+
+    router = router.nest("/log", Router::new().route("/dev", get(|| async {
+        "Dev log"
+    })));
+
+    router = router.nest("/users", Router::new().route("/", get(|uri: Uri| async move {
+        format!("User routes {}", uri)
+    })).fallback(user_fallback));
+
+    router = router.nest("/public", Router::new().route("/", get(|| async {
+        "Public routes"
+    })).fallback(public_fallback));
+
+    let user_api: Router = Router::new().route("/user/:id", get(users_get));
+
+    router = router.nest("/:version/api", user_api);
+
+    root_router.push(router);
     // build application
     let app = Router::new().merge(root_router.combine_routers()).fallback(not_found);
 
@@ -45,9 +70,27 @@ async fn main() {
     });
 }
 
+// fallback 1
+async fn user_fallback(uri: Uri) -> (StatusCode, String) {
+    (StatusCode::NOT_FOUND, format!("User not found for {}", uri))
+}
+
+// fallback 2
+async fn public_fallback() -> (StatusCode, &'static str) {
+    (StatusCode::NOT_FOUND, "Public url not found")
+}
+
+// user handler
+async fn users_get(uri: Uri, Path(params): Path<HashMap<String, String>>) -> String {
+    let version = params.get("version");
+    let id = params.get("id");
+    println!("Version {}, id {}", version.unwrap(), id.unwrap());
+    format!("Version: {}, id: {} {}", version.unwrap(), id.unwrap(), uri)
+}
+
 // not found
 async fn not_found(uri: Uri) -> (StatusCode, String) {
-    (StatusCode::NOT_FOUND, format!("No route fot {uri}"))
+    (StatusCode::NOT_FOUND, format!("No route for {uri}"))
 }
 
 // basic handler that response with static string
